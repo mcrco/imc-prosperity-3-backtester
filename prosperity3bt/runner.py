@@ -91,6 +91,8 @@ def create_activity_logs(
         position = state.position.get(product, 0)
         if position != 0:
             product_profit_loss += position * row.mid_price
+            if product == "MAGNIFICENT_MACARONS":
+                product_profit_loss -= 0.1 * position
 
         bid_prices_len = len(row.bid_prices)
         bid_volumes_len = len(row.bid_volumes)
@@ -159,7 +161,6 @@ def match_buy_order(
         trades.append(Trade(order.symbol, price, volume, "SUBMISSION", "", state.timestamp))
 
         state.position[order.symbol] = state.position.get(order.symbol, 0) + volume
-        data.profit_loss[order.symbol] -= price * volume
 
         order_depth.sell_orders[price] += volume
         if order_depth.sell_orders[price] == 0:
@@ -306,35 +307,39 @@ def match_orders(
         state.market_trades[product] = remaining_market_trades
         result.trades.extend([TradeRow(trade) for trade in remaining_market_trades])
         
-def calculate_conversion_cost(state: TradingState, quantity: int, observation: ConversionObservation) -> float:
+def calculate_conversion_cost(state: TradingState, quantity: int) -> float:
+    observation = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
     price = observation.askPrice
+    tariff = observation.importTariff
     if quantity < 0:
         price = observation.bidPrice
-    return price * quantity + quantity * observation.transportFees
+        tariff = observation.exportTariff
+    return price * quantity + (quantity * observation.transportFees * tariff)
 
 def process_conversions(
     state: TradingState,
     data: BacktestData,
     conversions: int,
     result: BacktestResult,
+    sandbox_row: SandboxLogRow,
 ) -> None:
     product = "MAGNIFICENT_MACARONS"
     current_position = state.position.get(product, 0)
-    conversion_limit = LIMITS["CONVERSION"]
+    conversion_limit = LIMITS["CONVERSIONS"]
+    pos_limit = LIMITS[product]
     
     # Check if the conversion request is valid
-    if abs(conversions) > min(abs(current_position), conversion_limit):
+    if abs(conversions) > min(abs(pos_limit - current_position), conversion_limit):
         return
     
-    conversion_cost = calculate_conversion_cost(state, product, conversions)
+    conversion_cost = calculate_conversion_cost(state, conversions)
+    if product not in state.position:
+        state.position[product] = 0
     state.position[product] += conversions
     data.profit_loss[product] -= conversion_cost
     state.conversions = conversions
     
-    result.sandbox_logs.append(SandboxLogRow(
-        timestamp=state.timestamp,
-        sandbox_log=f"Converted {conversions} of {product}. Cost: {conversion_cost}"
-    ))
+    sandbox_row.sandbox_log += f"Converted {conversions} of {product}. Cost: {conversion_cost}\n"
     
     trade = Trade(
         symbol=product,
@@ -353,13 +358,19 @@ def process_conversions(
         timestamp=state.timestamp,
     )
 
+    if product not in state.own_trades:
+        state.own_trades[product] = []
+    state.own_trades[product].append(trade)
     result.trades.append(TradeRow(trade))
     result.trades.append(TradeRow(conversion_trade))
     
-def process_storage_costs(state:TradingState):
+def process_storage_costs(state:TradingState, sandbox_row: SandboxLogRow):
     product = "MAGNIFICENT_MACARONS"
-    if state.position[product] > 0:
-        state.profit_loss[product] -= 0.1 * state.position[product]
+    position = state.position.get(product, 0)
+    if position > 0:
+        # print("YESSIR")
+        diff = 0.1 * position
+        sandbox_row.sandbox_log += f"Storage of {position} {product} cost: {-diff}\n"
 
 
 def run_backtest(
@@ -431,7 +442,7 @@ def run_backtest(
         create_activity_logs(state, data, result)
         enforce_limits(state, data, orders, sandbox_row)
         match_orders(state, data, orders, result, trade_matching_mode)
-        process_conversions(state, data, conversions, result)
-        process_storage_costs(state)
+        process_conversions(state, data, conversions, result, sandbox_row)
+        process_storage_costs(state, sandbox_row)
 
     return result
