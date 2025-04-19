@@ -305,6 +305,61 @@ def match_orders(
 
         state.market_trades[product] = remaining_market_trades
         result.trades.extend([TradeRow(trade) for trade in remaining_market_trades])
+        
+def calculate_conversion_cost(state: TradingState, quantity: int, observation: ConversionObservation) -> float:
+    price = observation.askPrice
+    if quantity < 0:
+        price = observation.bidPrice
+    return price * quantity + quantity * observation.transportFees
+
+def process_conversions(
+    state: TradingState,
+    data: BacktestData,
+    conversions: int,
+    result: BacktestResult,
+) -> None:
+    product = "MAGNIFICENT_MACARONS"
+    current_position = state.position.get(product, 0)
+    conversion_limit = LIMITS["CONVERSION"]
+    
+    # Check if the conversion request is valid
+    if abs(conversions) > min(abs(current_position), conversion_limit):
+        return
+    
+    conversion_cost = calculate_conversion_cost(state, product, conversions)
+    state.position[product] += conversions
+    data.profit_loss[product] -= conversion_cost
+    state.conversions = conversions
+    
+    result.sandbox_logs.append(SandboxLogRow(
+        timestamp=state.timestamp,
+        sandbox_log=f"Converted {conversions} of {product}. Cost: {conversion_cost}"
+    ))
+    
+    trade = Trade(
+        symbol=product,
+        price=conversion_cost,
+        quantity=conversions,
+        buyer="",
+        seller="",
+        timestamp=state.timestamp,
+    )
+    conversion_trade = Trade(
+        symbol=product + "_CONVERSION",
+        price=conversion_cost,
+        quantity=conversions,
+        buyer="",
+        seller="",
+        timestamp=state.timestamp,
+    )
+
+    result.trades.append(TradeRow(trade))
+    result.trades.append(TradeRow(conversion_trade))
+    
+def process_storage_costs(state:TradingState):
+    product = "MAGNIFICENT_MACARONS"
+    if state.position[product] > 0:
+        state.profit_loss[product] -= 0.1 * state.position[product]
 
 
 def run_backtest(
@@ -376,5 +431,7 @@ def run_backtest(
         create_activity_logs(state, data, result)
         enforce_limits(state, data, orders, sandbox_row)
         match_orders(state, data, orders, result, trade_matching_mode)
+        process_conversions(state, data, conversions, result)
+        process_storage_costs(state)
 
     return result
