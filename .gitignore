@@ -177,3 +177,4 @@ pyrightconfig.json
 
 # Default output directory
 backtests/
+.aider*
