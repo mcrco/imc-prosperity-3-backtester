@@ -90,9 +90,14 @@ def create_activity_logs(
 
         position = state.position.get(product, 0)
         if position != 0:
-            product_profit_loss += position * row.mid_price
+            mid_price = row.mid_price
             if product == "MAGNIFICENT_MACARONS":
                 product_profit_loss -= 0.1 * position
+                # if state.timestamp % 1_000_000 == 999_500:
+                #     mid_price = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].bidPrice
+                #     state.position[product] = 0
+                #     print("RESET MACARONS POSITION to 0")
+            product_profit_loss += position * mid_price
 
         bid_prices_len = len(row.bid_prices)
         bid_volumes_len = len(row.bid_volumes)
@@ -327,6 +332,33 @@ def process_conversions(
     current_position = state.position.get(product, 0)
     conversion_limit = LIMITS["CONVERSIONS"]
     pos_limit = LIMITS[product]
+    
+    if state.timestamp % 1_000_000 == 999_500:
+        print("LIQUIDATING ALL MACARONS")
+        conversions = -current_position
+        conversion_cost = calculate_conversion_cost(state, conversions)
+        trade = Trade(
+            symbol=product,
+            price=conversion_cost,
+            quantity=conversions,
+            buyer="",
+            seller="",
+            timestamp=state.timestamp,
+        )
+        conversion_trade = Trade(
+            symbol=product + "_CONVERSION",
+            price=conversion_cost,
+            quantity=conversions,
+            buyer="",
+            seller="",
+            timestamp=state.timestamp,
+        )
+        if product not in state.own_trades:
+            state.own_trades[product] = []
+        state.own_trades[product].append(trade)
+        result.trades.append(TradeRow(trade))
+        result.trades.append(TradeRow(conversion_trade))
+        
     
     # Check if the conversion request is valid
     if abs(conversions) > min(abs(pos_limit - current_position), conversion_limit):
